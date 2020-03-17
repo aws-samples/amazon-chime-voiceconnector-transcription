@@ -47,6 +47,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import static com.amazonaws.kvstranscribestreaming.AudioUtils.S3_CLIENT_CONNECTION_TIMEOUT_MILLIS;
+import static com.amazonaws.kvstranscribestreaming.AudioUtils.S3_CLIENT_CLIENT_EXECUTION_TIMEOUT_MILLIS;
+
 /**
  * Demonstrate Amazon VoiceConnectors's real-time transcription feature using
  * AWS Kinesis Video Streams and AWS Transcribe. The data flow is :
@@ -173,6 +176,7 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
         FragmentMetadataVisitor.BasicMkvTagProcessor tagProcessor = new FragmentMetadataVisitor.BasicMkvTagProcessor();
         FragmentMetadataVisitor fragmentVisitor = FragmentMetadataVisitor.create(Optional.of(tagProcessor));
 
+        int kvsTimeoutSecond = 900 - S3_CLIENT_CLIENT_EXECUTION_TIMEOUT_MILLIS / 1000 - S3_CLIENT_CONNECTION_TIMEOUT_MILLIS / 1000;
         if (transcribeEnabled) {
             try (TranscribeStreamingRetryClient client = new TranscribeStreamingRetryClient(getTranscribeCredentials(),
                     TRANSCRIBE_ENDPOINT, TRANSCRIBE_REGION, metricsUtil)) {
@@ -186,9 +190,9 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
                                 fragmentVisitor, shouldWriteAudioToFile),
                         new StreamTranscriptionBehaviorImpl(segmentWriter));
 
-                result.get(900, TimeUnit.SECONDS);
+                result.get(kvsTimeoutSecond, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                logger.debug("Timing out KVS to Transcribe Streaming after 900 sec");
+                logger.debug("Timing out KVS to Transcribe Streaming after {} sec", kvsTimeoutSecond);
 
             } catch (Exception e) {
                 logger.error("Error during streaming: ", e);

@@ -1,6 +1,7 @@
 package com.amazonaws.kvstranscribestreaming;
 
 import com.amazonaws.SdkClientException;
+import com.amazonaws.ClientConfiguration;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
@@ -44,6 +45,9 @@ public final class AudioUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(AudioUtils.class);
 
+    static final int S3_CLIENT_CONNECTION_TIMEOUT_MILLIS = 1000;
+    static final int S3_CLIENT_CLIENT_EXECUTION_TIMEOUT_MILLIS = 5000;
+
     /**
      * Converts the given raw audio data into a wav file. Returns the wav file back.
      */
@@ -71,6 +75,10 @@ public final class AudioUtils {
             AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
                     .withRegion(region)
                     .withCredentials(awsCredentials)
+                    .withClientConfiguration(new ClientConfiguration()
+                      .withConnectionTimeout(S3_CLIENT_CONNECTION_TIMEOUT_MILLIS)
+                      .withClientExecutionTimeout(S3_CLIENT_CLIENT_EXECUTION_TIMEOUT_MILLIS)
+                      )
                     .build();
 
             wavFile = convertToWav(audioFilePath);
