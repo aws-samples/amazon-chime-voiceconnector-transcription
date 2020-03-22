@@ -23,7 +23,10 @@ dependencies {
             'software.amazon.awssdk:netty-nio-client:2.2.0',
 
             // need this for logging
-            'org.apache.commons:commons-lang3:3.6'
+            'org.apache.commons:commons-lang3:3.6',
+
+            // need for argument parsing
+            'commons-cli:commons-cli:1.4'
     )
 }
 

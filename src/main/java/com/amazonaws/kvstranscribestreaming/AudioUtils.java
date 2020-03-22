@@ -64,7 +64,7 @@ public final class AudioUtils {
      * @param transactionId
      * @param awsCredentials
      */
-    public static void uploadRawAudio(Regions region, String bucketName, String keyPrefix, String audioFilePath, String transactionId, boolean publicReadAcl, AWSCredentialsProvider awsCredentials) {
+    public static void uploadRawAudio(Regions region, String bucketName, String keyPrefix, String audioFilePath, String transactionId, String startTime, boolean publicReadAcl, AWSCredentialsProvider awsCredentials) {
         File wavFile = null;
         try {
 
@@ -83,6 +83,7 @@ public final class AudioUtils {
             ObjectMetadata metadata = new ObjectMetadata();
             metadata.setContentType("audio/wav");
             metadata.addUserMetadata("transactionId", transactionId);
+            metadata.addUserMetadata("startTime", startTime);
             request.setMetadata(metadata);
 
             if (publicReadAcl) {

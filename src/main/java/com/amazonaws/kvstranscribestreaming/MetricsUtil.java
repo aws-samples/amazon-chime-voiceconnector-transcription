@@ -26,7 +26,7 @@ import java.util.Date;
  */
 public class MetricsUtil {
 
-    private static String NAMESPACE = "KVSTranscribeStreamingLambda";
+    private static String NAMESPACE = "KVSTranscribeStreaming";
     private final AmazonCloudWatch amazonCloudWatch;
 
     public MetricsUtil(AmazonCloudWatch amazonCloudWatch) {

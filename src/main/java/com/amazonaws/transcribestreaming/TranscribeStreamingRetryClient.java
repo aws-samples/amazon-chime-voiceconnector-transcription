@@ -43,9 +43,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class TranscribeStreamingRetryClient implements AutoCloseable {
 
-    private static final int DEFAULT_MAX_RETRIES = 5;
     private static final int DEFAULT_MAX_SLEEP_TIME_MILLS = 500;
-    private int maxRetries = DEFAULT_MAX_RETRIES;
     private int sleepTime = DEFAULT_MAX_SLEEP_TIME_MILLS;
     private final TranscribeStreamingAsyncClient client;
     private final MetricsUtil metricsUtil;
@@ -80,24 +78,6 @@ public class TranscribeStreamingRetryClient implements AutoCloseable {
     public TranscribeStreamingRetryClient(TranscribeStreamingAsyncClient client, MetricsUtil metricsUtil) {
         this.client = client;
         this.metricsUtil = metricsUtil;
-    }
-
-    /**
-     * Get Max retries
-     *
-     * @return Max retries
-     */
-    public int getMaxRetries() {
-        return maxRetries;
-    }
-
-    /**
-     * Set Max retries
-     *
-     * @param maxRetries Max retries
-     */
-    public void setMaxRetries(int maxRetries) {
-        this.maxRetries = maxRetries;
     }
 
     /**
@@ -137,7 +117,7 @@ public class TranscribeStreamingRetryClient implements AutoCloseable {
 
         CompletableFuture<Void> finalFuture = new CompletableFuture<>();
 
-        recursiveStartStream(rebuildRequestWithSession(request), publisher, responseHandler, finalFuture, 0);
+        recursiveStartStream(rebuildRequestWithSession(request), publisher, responseHandler, finalFuture);
 
         return finalFuture;
     }
@@ -149,20 +129,18 @@ public class TranscribeStreamingRetryClient implements AutoCloseable {
      * @param publisher       The source audio stream as Publisher
      * @param responseHandler StreamTranscriptionBehavior object that defines how the response needs to be handled.
      * @param finalFuture     final future to finish on completing the chained futures.
-     * @param retryAttempt    Current attempt number
      */
     private void recursiveStartStream(final StartStreamTranscriptionRequest request,
                                       final Publisher<AudioStream> publisher,
                                       final StreamTranscriptionBehavior responseHandler,
-                                      final CompletableFuture<Void> finalFuture,
-                                      final int retryAttempt) {
+                                      final CompletableFuture<Void> finalFuture) {
         CompletableFuture<Void> result = client.startStreamTranscription(request, publisher,
                 getResponseHandler(responseHandler));
         result.whenComplete((r, e) -> {
             if (e != null) {
                 logger.debug("Error occured: " + e.getMessage());
 
-                if (retryAttempt <= maxRetries && isExceptionRetriable(e)) {
+                if (isExceptionRetriable(e)) {
                     logger.debug("Retriable error occurred and will be retried.");
                     logger.debug("Sleeping for sometime before retrying...");
                     try {
@@ -171,8 +149,7 @@ public class TranscribeStreamingRetryClient implements AutoCloseable {
                         logger.error("Sleep between retries interrupted. Failed with exception: ", e);
                         finalFuture.completeExceptionally(e);
                     }
-                    logger.debug("Making retry attempt: " + (retryAttempt + 1));
-                    recursiveStartStream(request, publisher, responseHandler, finalFuture, retryAttempt + 1);
+                    recursiveStartStream(request, publisher, responseHandler, finalFuture);
                 } else {
                     metricsUtil.recordMetric("TranscribeStreamError", 1);
                     logger.error("Encountered unretriable exception or ran out of retries.", e);

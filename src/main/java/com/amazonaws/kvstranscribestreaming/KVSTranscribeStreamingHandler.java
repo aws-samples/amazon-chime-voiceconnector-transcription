@@ -9,16 +9,14 @@ import com.amazonaws.regions.Regions;
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder;
 import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
 import com.amazonaws.services.dynamodbv2.document.DynamoDB;
-import com.amazonaws.services.lambda.runtime.Context;
-import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import com.amazonaws.transcribestreaming.KVSByteToAudioEventSubscription;
 import com.amazonaws.transcribestreaming.StreamTranscriptionBehaviorImpl;
 import com.amazonaws.transcribestreaming.TranscribeStreamingRetryClient;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.Options;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.slf4j.Logger;
@@ -41,11 +39,8 @@ import java.nio.file.Paths;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Demonstrate Amazon VoiceConnectors's real-time transcription feature using
@@ -73,7 +68,7 @@ import java.util.concurrent.TimeoutException;
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, String> {
+public class KVSTranscribeStreamingHandler {
 
     private static final Regions REGION = Regions.fromName(System.getenv("AWS_REGION"));
     private static final Regions TRANSCRIBE_REGION = Regions.fromName(System.getenv("AWS_REGION"));
@@ -85,11 +80,9 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
     private static final boolean CONSOLE_LOG_TRANSCRIPT_FLAG = true;
     private static final boolean RECORDINGS_PUBLIC_READ_ACL = false;
 
-    private static final Logger logger = LoggerFactory.getLogger(KVSTranscribeStreamingLambda.class);
+    private static final Logger logger = LoggerFactory.getLogger(KVSTranscribeStreamingHandler.class);
     public static final MetricsUtil metricsUtil = new MetricsUtil(AmazonCloudWatchClientBuilder.defaultClient());
     private static final DateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
-    private static final ObjectMapper objectMapper = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     // SegmentWriter saves Transcription segments to DynamoDB
     private TranscribedSegmentWriter segmentWriter = null;
@@ -97,47 +90,31 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
     private static final DynamoDB dynamoDB = new DynamoDB(
             AmazonDynamoDBClientBuilder.standard().withRegion(REGION.getName()).build());
 
-    /**
-     * Handler function for the Lambda
-     *
-     * @param event
-     * @param context
-     * @return
-     */
-    @Override
-    public String handleRequest(SQSEvent event, Context context) {
+    public static void main(String[] args) {
+        final KVSTranscribeStreamingHandler handler = new KVSTranscribeStreamingHandler();
+        Optional<StreamingDetail> optionalDetail = constructStreamingDetail(args);
+        optionalDetail.ifPresent(handler::handleRequest);
+    }
 
+    private String handleRequest(final StreamingDetail detail) {
         try {
-            logger.info("received request : " + objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException e) {
-            logger.error("Error happened where serializing the event", e);
-        }
-        logger.info("received context: " + context.toString());
+            final String streamARN = detail.streamARN();
+            final String firstFragementNumber = detail.firstFragementNumber();
+            final String transactionId = detail.transactionId();
+            final String callId = detail.callId();
+            final String streamingStatus = detail.streamingStatus();
+            final String startTime = detail.startTime();
 
-        try {
-            for (SQSEvent.SQSMessage sqsMessage : event.getRecords()) {
-                Map<String, Object> snsMessage = objectMapper.readValue(sqsMessage.getBody(), Map.class);
+            if (streamingStatus.equals("STARTED")) {
 
-                Map<String, String> detail = (Map) snsMessage.get("detail");
+                logger.info("Received STARTED event");
 
-                final String streamARN = detail.get("streamArn");
-                final String firstFragementNumber = detail.get("startFragmentNumber");
-                final String transactionId = detail.get("transactionId");
-                final String callId = detail.get("callId");
-                final String streamingStatus = detail.get("streamingStatus");
+                // create a SegmentWriter to be able to save off transcription results
+                segmentWriter = new TranscribedSegmentWriter(transactionId, dynamoDB, CONSOLE_LOG_TRANSCRIPT_FLAG);
 
-                if (streamingStatus.equals("STARTED")) {
-
-                    logger.info("Received STARTED event");
-
-                    // create a SegmentWriter to be able to save off transcription results
-                    segmentWriter = new TranscribedSegmentWriter(transactionId, dynamoDB, CONSOLE_LOG_TRANSCRIPT_FLAG);
-
-                    startKVSToTranscribeStreaming(streamARN, firstFragementNumber, transactionId,
-                            Boolean.valueOf(IS_TRANSCRIBE_ENABLED), true, callId);
-                    
-                    logger.info("Finished processing request");
-                }
+                startKVSToTranscribeStreaming(streamARN, firstFragementNumber, transactionId,
+                        Boolean.valueOf(IS_TRANSCRIBE_ENABLED), true, callId, startTime);
+                logger.info("Finished processing request");
             }
 
         } catch (Exception e) {
@@ -159,7 +136,7 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
      * @throws Exception
      */
     private void startKVSToTranscribeStreaming(String streamName, String startFragmentNum, String transactionId,
-            boolean transcribeEnabled, boolean shouldWriteAudioToFile, final String callId) throws Exception {
+            boolean transcribeEnabled, boolean shouldWriteAudioToFile, final String callId, final String startTime) throws Exception {
 
         Path saveAudioFilePath = Paths.get("/tmp",
                 transactionId + "_" + callId + "_" + DATE_FORMAT.format(new Date()) + ".raw");
@@ -186,17 +163,14 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
                                 fragmentVisitor, shouldWriteAudioToFile),
                         new StreamTranscriptionBehaviorImpl(segmentWriter));
 
-                result.get(900, TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                logger.debug("Timing out KVS to Transcribe Streaming after 900 sec");
-
+                result.get();
             } catch (Exception e) {
                 logger.error("Error during streaming: ", e);
                 throw e;
 
             } finally {
                 if (shouldWriteAudioToFile) {
-                    closeFileAndUploadRawAudio(kvsInputStream, fileOutputStream, saveAudioFilePath, transactionId);
+                    closeFileAndUploadRawAudio(kvsInputStream, fileOutputStream, saveAudioFilePath, transactionId, startTime);
                 }
             }
         } else {
@@ -215,7 +189,7 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
                 }
 
             } finally {
-                closeFileAndUploadRawAudio(kvsInputStream, fileOutputStream, saveAudioFilePath, transactionId);
+                closeFileAndUploadRawAudio(kvsInputStream, fileOutputStream, saveAudioFilePath, transactionId, startTime);
             }
         }
     }
@@ -230,7 +204,7 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
      * @throws IOException
      */
     private void closeFileAndUploadRawAudio(InputStream kvsInputStream, FileOutputStream fileOutputStream,
-            Path saveAudioFilePath, String transactionId) throws IOException {
+            Path saveAudioFilePath, String transactionId, String startTime) throws IOException {
 
         kvsInputStream.close();
         fileOutputStream.close();
@@ -238,10 +212,38 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<SQSEvent, St
         // Upload the Raw Audio file to S3
         if (new File(saveAudioFilePath.toString()).length() > 0) {
             AudioUtils.uploadRawAudio(REGION, RECORDINGS_BUCKET_NAME, RECORDINGS_KEY_PREFIX,
-                    saveAudioFilePath.toString(), transactionId, RECORDINGS_PUBLIC_READ_ACL, getAWSCredentials());
+                    saveAudioFilePath.toString(), transactionId, startTime, RECORDINGS_PUBLIC_READ_ACL, getAWSCredentials());
         } else {
             logger.info("Skipping upload to S3. Audio file has 0 bytes: " + saveAudioFilePath);
         }
+    }
+
+    private static Optional<StreamingDetail> constructStreamingDetail(String[] args) {
+        final Options options = new Options();
+        options.addRequiredOption("a", "streamARN", true, "Stream ARN" );
+        options.addRequiredOption("f", "startFragmentNumber", true, "start fragement number");
+        options.addRequiredOption("i", "transactionId", true, "transaction Id. UUID");
+        options.addRequiredOption("c", "callId", true, "CallId. UUID");
+        options.addRequiredOption("s", "streamingStatus", true, "Streaming Status. i.e. STARTED, ENDED");
+        options.addRequiredOption("t", "startTime", true, "Streaming Start Time. Format: yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+
+        final CommandLineParser parser = new DefaultParser();
+        StreamingDetail detail = null;
+        try {
+            final CommandLine line = parser.parse(options, args);
+            detail = new StreamingDetail.builder()
+                    .streamARN(line.getOptionValue("a"))
+                    .firstFragementNumber(line.getOptionValue("f"))
+                    .transactionId(line.getOptionValue("i"))
+                    .callId(line.getOptionValue("c"))
+                    .streamingStatus(line.getOptionValue("s"))
+                    .startTime(line.getOptionValue("t"))
+                    .build();
+        } catch (final org.apache.commons.cli.ParseException e) {
+            logger.error("KVSTranscribeStreamingHandler: Unable to parse arguments. Reason: " + e.getMessage(), e);
+        }
+
+        return Optional.ofNullable(detail);
     }
 
     /**
